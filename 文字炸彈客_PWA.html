@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#111827">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>文字炸彈客</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/pinyin-pro"></script>
+    
+    <script>
+        // Generate SVG Icon for PWA Manifest
+        const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" fill="#111827"/><text x="50%" y="50%" font-size="200" text-anchor="middle" dy=".3em">💣</text></svg>`;
+        const iconUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(iconSvg);
+
+        // Generate PWA Manifest
+        const manifest = {
+            name: "文字炸彈客",
+            short_name: "炸彈客",
+            start_url: location.pathname,
+            display: "standalone",
+            background_color: "#f3f4f6",
+            theme_color: "#111827",
+            orientation: "portrait",
+            icons: [
+                { src: iconUrl, sizes: "192x192 512x512", type: "image/svg+xml", purpose: "any maskable" }
+            ]
+        };
+        const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+        const manifestUrl = URL.createObjectURL(manifestBlob);
+        document.write(`<link rel="manifest" href="${manifestUrl}">`);
+        document.write(`<link rel="apple-touch-icon" href="${iconUrl}">`);
+
+        // Generate Service Worker
+        const swCode = `
+            self.addEventListener('install', (e) => self.skipWaiting());
+            self.addEventListener('activate', (e) => self.clients.claim());
+            self.addEventListener('fetch', (e) => {
+                // Network first, simple pass-through for single file PWA
+                e.respondWith(fetch(e.request).catch(() => new Response('Offline mode not fully cached, but app is single-file.')));
+            });
+        `;
+        const swBlob = new Blob([swCode], { type: 'application/javascript' });
+        const swUrl = URL.createObjectURL(swBlob);
+        
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register(swUrl).catch(err => console.log('SW setup failed: ', err));
+            });
+        }
+    </script>
+
+    <style>
+        body {
+            -webkit-tap-highlight-color: transparent;
+            background-color: #f3f4f6;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .pulse-animation {
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1.02); box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .pop-in {
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+        @keyframes popIn {
+            0% { opacity: 0; transform: scale(0.3) translateY(40px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden text-gray-800 font-sans">
+
+    <header class="bg-gray-900 text-white p-4 text-center shadow-md z-10 flex-shrink-0 pt-safe">
+        <h1 class="text-3xl font-black tracking-wider">💣 文字炸彈客</h1>
+    </header>
+
+    <main class="flex-1 flex flex-col items-center p-4 w-full max-w-2xl mx-auto space-y-4 overflow-y-auto">
+        
+        <div id="gameDisplay" class="bg-white w-full rounded-3xl shadow-xl p-6 text-center flex flex-col items-center justify-center border-4 border-dashed border-gray-300 min-h-[350px] relative transition-all duration-300">
+            
+            <p id="systemMessage" class="absolute top-4 text-red-500 font-bold hidden bg-red-100 px-4 py-1 rounded-full"></p>
+            
+            <p id="instructionText" class="text-gray-400 text-xl font-medium mb-4">請按下開始按鈕</p>
+            
+            <h2 id="currentQuestionText" class="text-4xl md:text-5xl font-extrabold text-blue-700 leading-snug break-words w-full">
+                <!-- Question appears here -->
+            </h2>
+
+            <div id="hugeAnswerContainer" class="hidden mt-6 flex-col items-center justify-center w-full">
+                <span class="text-gray-500 text-xl font-bold mb-2">正確答案是：</span>
+                <h1 id="hugeAnswerText" class="text-[5rem] leading-none md:text-[7rem] font-black text-red-600 drop-shadow-xl tracking-widest break-words w-full">
+                    <!-- Massive Answer appears here -->
+                </h1>
+            </div>
+        </div>
+
+        <div class="w-full text-center space-y-2 flex-shrink-0">
+            <p id="statusIndicator" class="text-lg font-bold text-gray-500 h-8 flex items-center justify-center">
+                等待開始...
+            </p>
+            <div class="h-14 flex items-center justify-center overflow-hidden bg-gray-200 rounded-xl px-2">
+                <p id="recognizedText" class="text-2xl md:text-3xl font-bold text-gray-700 truncate w-full">
+                    ...
+                </p>
+            </div>
+        </div>
+
+        <div id="controlPanel" class="hidden w-full grid grid-cols-3 gap-2 flex-shrink-0">
+            <button id="restartBtn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-4 rounded-xl shadow transition-colors text-base active:scale-95">
+                🔄 重來
+            </button>
+            <button id="pauseBtn" class="bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold py-4 rounded-xl shadow transition-colors text-base active:scale-95">
+                ⏸️ 暫停
+            </button>
+            <button id="nextBtn" class="bg-blue-100 hover:bg-blue-200 text-blue-800 font-bold py-4 rounded-xl shadow transition-colors text-base active:scale-95">
+                ⏭️ 下一題
+            </button>
+        </div>
+
+        <button id="startBtn" class="w-full bg-red-600 hover:bg-red-700 text-white text-3xl font-black py-6 rounded-2xl shadow-[0_10px_20px_rgba(220,38,38,0.4)] transition-all transform active:translate-y-2 flex items-center justify-center gap-3 flex-shrink-0">
+            <span>🎤 點我開始遊戲</span>
+        </button>
+
+    </main>
+
+    <div class="w-full bg-white border-t border-gray-200 p-4 shadow-[0_-5px_15px_rgba(0,0,0,0.05)] z-10 flex-shrink-0">
+        <details class="max-w-2xl mx-auto group">
+            <summary class="text-lg font-bold text-gray-700 cursor-pointer select-none outline-none list-none flex items-center justify-center">
+                <span class="mr-2">⚙️</span> 題庫管理 (點擊展開) <span class="ml-2 transition group-open:rotate-180">▼</span>
+            </summary>
+            <div class="mt-4 pt-4 border-t border-gray-100">
+                <p class="text-xs text-gray-500 mb-2">格式：題目 - 答案 (每行一題)</p>
+                <textarea id="questionBankInput" class="w-full h-32 p-3 border-2 border-gray-200 rounded-xl text-lg focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none resize-none mb-3 font-mono"></textarea>
+                <button id="saveBankBtn" class="w-full bg-gray-800 text-white text-xl font-bold py-4 rounded-xl active:bg-gray-700 transition-colors shadow-md">
+                    💾 儲存題庫
+                </button>
+            </div>
+        </details>
+    </div>
+
+    <script>
+        const { pinyin } = pinyinPro;
+
+        const defaultQuestions = [
+            "兩個字的動物 - 大象", "狗的品種 - 吉娃娃", "周杰倫三個字的歌 - 雙節棍",
+            "台灣行政區 - 宜蘭", "汽車品牌 - 賓士", "手搖品牌 - 50嵐",
+            "運動項目 - 網球", "兩個字身體器官 - 大腦", "三個字水果名 - 火龍果",
+            "鼎泰豐的菜名 - 排骨炒飯", "日本行政區 - 熊本", "女性YouTuber - 千千",
+            "兩個字台灣男藝人 - 菜頭", "三個字的寶可夢 - 傑尼龜", "台灣政治人物 - 韓國瑜"
+        ];
+
+        let questionBank = [];
+        let currentExpectedAnswer = "";
+        let isGameActive = false;
+        let isPaused = false;
+        let autoNextTimeout = null;
+        let audioCtx = null;
+        
+        // DOM Elements
+        const DOM = {
+            currentQuestionText: document.getElementById('currentQuestionText'),
+            hugeAnswerContainer: document.getElementById('hugeAnswerContainer'),
+            hugeAnswerText: document.getElementById('hugeAnswerText'),
+            instructionText: document.getElementById('instructionText'),
+            gameDisplay: document.getElementById('gameDisplay'),
+            recognizedText: document.getElementById('recognizedText'),
+            statusIndicator: document.getElementById('statusIndicator'),
+            startBtn: document.getElementById('startBtn'),
+            controlPanel: document.getElementById('controlPanel'),
+            restartBtn: document.getElementById('restartBtn'),
+            pauseBtn: document.getElementById('pauseBtn'),
+            nextBtn: document.getElementById('nextBtn'),
+            questionBankInput: document.getElementById('questionBankInput'),
+            saveBankBtn: document.getElementById('saveBankBtn'),
+            systemMessage: document.getElementById('systemMessage')
+        };
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition = null;
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.lang = 'zh-TW';
+            recognition.continuous = true;   
+            recognition.interimResults = true; 
+        }
+
+        function playMarioClearSound() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            // C4 -> Ab4 -> Bb4 -> C5 Arpeggio patterns
+            const melody = [
+                [196.00, 0, 0.12], [261.63, 0.12, 0.12], [329.63, 0.24, 0.12], [392.00, 0.36, 0.12], [523.25, 0.48, 0.12], [659.25, 0.60, 0.12], [783.99, 0.72, 0.35], [659.25, 1.07, 0.35],
+                [207.65, 1.42, 0.12], [261.63, 1.54, 0.12], [311.13, 1.66, 0.12], [415.30, 1.78, 0.12], [523.25, 1.90, 0.12], [622.25, 2.02, 0.12], [830.61, 2.14, 0.35], [622.25, 2.49, 0.35],
+                [233.08, 2.84, 0.12], [293.66, 2.96, 0.12], [349.23, 3.08, 0.12], [466.16, 3.20, 0.12], [587.33, 3.32, 0.12], [698.46, 3.44, 0.12], 
+                [932.33, 3.56, 0.12], [932.33, 3.68, 0.12], [932.33, 3.80, 0.12], [1046.50, 3.92, 1.1] // Total duration ~5 seconds
+            ];
+
+            const now = audioCtx.currentTime;
+            
+            melody.forEach(note => {
+                const [freq, offset, duration] = note;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                
+                osc.type = 'square'; // 8-bit classic sound
+                osc.frequency.value = freq;
+                
+                gain.gain.setValueAtTime(0, now + offset);
+                gain.gain.linearRampToValueAtTime(0.12, now + offset + 0.01);
+                gain.gain.setValueAtTime(0.12, now + offset + duration - 0.02);
+                gain.gain.linearRampToValueAtTime(0, now + offset + duration);
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                osc.start(now + offset);
+                osc.stop(now + offset + duration);
+            });
+        }
+
+        function getPinyinArray(text) {
+            return pinyin(text, { toneType: 'num', type: 'array' }).map(p => p.toLowerCase());
+        }
+
+        function isMatch(recognizedStr, targetStr) {
+            const cleanRec = recognizedStr.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+            const cleanTarget = targetStr.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+            
+            if(!cleanRec || !cleanTarget) return false;
+            if (cleanRec.includes(cleanTarget)) return true; // Direct string match
+
+            const recP = getPinyinArray(cleanRec);
+            const targetP = getPinyinArray(cleanTarget);
+
+            if (targetP.length === 0 || recP.length < targetP.length) return false;
+            
+            // Search for consecutive pinyin array match
+            for (let i = 0; i <= recP.length - targetP.length; i++) {
+                let match = true;
+                for (let j = 0; j < targetP.length; j++) {
+                    if (recP[i + j] !== targetP[j]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) return true;
+            }
+            return false;
+        }
+
+        function showMessage(msg) {
+            DOM.systemMessage.innerText = msg;
+            DOM.systemMessage.classList.remove('hidden');
+            setTimeout(() => DOM.systemMessage.classList.add('hidden'), 3000);
+        }
+
+        if (recognition) {
+            recognition.onresult = (event) => {
+                if (!isGameActive || isPaused) return;
+
+                let interim = '';
+                let final = '';
+
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) final += event.results[i][0].transcript;
+                    else interim += event.results[i][0].transcript;
+                }
+
+                const currentText = final || interim;
+                if (currentText) {
+                    DOM.recognizedText.innerText = `「${currentText}」`;
+                    
+                    if (isMatch(currentText, currentExpectedAnswer)) {
+                        triggerWin();
+                    }
+                }
+            };
+
+            recognition.onerror = (event) => {
+                if (event.error !== 'no-speech' && event.error !== 'aborted') {
+                    if(!isPaused && isGameActive) {
+                        try { recognition.start(); } catch(e){}
+                    }
+                }
+            };
+
+            recognition.onend = () => {
+                // Auto-restart mic to prevent unexpected stops
+                if (isGameActive && !isPaused) {
+                    try { recognition.start(); } catch (e) {
+                        setTimeout(() => { if (isGameActive && !isPaused) recognition.start(); }, 200);
+                    }
+                }
+            };
+        }
+
+        function triggerWin() {
+            isGameActive = false;
+            try { recognition.stop(); } catch(e) {}
+
+            playMarioClearSound();
+
+            DOM.statusIndicator.innerHTML = "🎉 <span class='text-green-600'>答對了！</span> 🎉";
+            DOM.statusIndicator.className = "text-2xl font-black text-green-600 flex items-center justify-center animate-bounce mt-2";
+            
+            DOM.gameDisplay.classList.replace('border-gray-300', 'border-green-500');
+            DOM.gameDisplay.classList.replace('border-dashed', 'border-solid');
+            DOM.gameDisplay.classList.add('bg-green-50');
+            
+            DOM.currentQuestionText.classList.remove('text-4xl', 'md:text-5xl');
+            DOM.currentQuestionText.classList.add('text-2xl', 'md:text-3xl', 'text-gray-500');
+            
+            // Show Massive Answer
+            DOM.hugeAnswerText.innerText = currentExpectedAnswer;
+            DOM.hugeAnswerContainer.classList.remove('hidden');
+            DOM.hugeAnswerContainer.classList.add('flex', 'pop-in');
+
+            DOM.controlPanel.classList.add('hidden');
+            DOM.startBtn.classList.remove('hidden');
+            DOM.startBtn.disabled = true;
+            DOM.startBtn.classList.remove('pulse-animation', 'bg-red-600');
+            DOM.startBtn.classList.add('bg-gray-400');
+            DOM.startBtn.innerHTML = "⏳ 5秒後自動下一題...";
+
+            // Wait 5 seconds, auto transition
+            clearTimeout(autoNextTimeout);
+            autoNextTimeout = setTimeout(() => {
+                startNextQuestion();
+            }, 5000);
+        }
+
+        function startNextQuestion() {
+            if (!recognition) {
+                showMessage("瀏覽器不支援語音功能");
+                return;
+            }
+            clearTimeout(autoNextTimeout);
+            isPaused = false;
+            DOM.pauseBtn.innerHTML = "⏸️ 暫停";
+            DOM.pauseBtn.classList.replace('bg-green-100', 'bg-amber-100');
+            DOM.pauseBtn.classList.replace('text-green-800', 'text-amber-800');
+
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            // Reset UI
+            DOM.gameDisplay.classList.remove('border-green-500', 'border-solid', 'bg-green-50');
+            DOM.gameDisplay.classList.add('border-gray-300', 'border-dashed');
+            DOM.instructionText.style.display = 'none';
+            DOM.currentQuestionText.classList.add('text-4xl', 'md:text-5xl');
+            DOM.currentQuestionText.classList.remove('text-2xl', 'md:text-3xl', 'text-gray-500');
+            DOM.hugeAnswerContainer.classList.add('hidden');
+            DOM.hugeAnswerContainer.classList.remove('flex', 'pop-in');
+            DOM.hugeAnswerText.innerText = "";
+            DOM.recognizedText.innerText = "...";
+            
+            // Randomly select question
+            const randomItem = questionBank[Math.floor(Math.random() * questionBank.length)];
+            const parts = randomItem.split('-');
+            if (parts.length >= 2) {
+                DOM.currentQuestionText.innerText = parts[0].trim();
+                currentExpectedAnswer = parts[1].trim();
+            } else {
+                DOM.currentQuestionText.innerText = randomItem;
+                currentExpectedAnswer = randomItem;
+            }
+
+            DOM.startBtn.classList.add('hidden');
+            DOM.controlPanel.classList.remove('hidden');
+            
+            DOM.statusIndicator.innerHTML = "🔴 <span class='text-red-500 blink pulse-animation'>麥克風持續收音中...</span>";
+            DOM.statusIndicator.className = "text-xl font-bold flex items-center justify-center mt-2";
+
+            isGameActive = true;
+            try { recognition.stop(); } catch(e){}
+            setTimeout(() => { try { recognition.start(); } catch(e){} }, 200);
+        }
+
+        DOM.startBtn.addEventListener('click', startNextQuestion);
+        DOM.nextBtn.addEventListener('click', startNextQuestion);
+
+        DOM.restartBtn.addEventListener('click', () => {
+            clearTimeout(autoNextTimeout);
+            isPaused = false;
+            DOM.pauseBtn.innerHTML = "⏸️ 暫停";
+            DOM.pauseBtn.classList.replace('bg-green-100', 'bg-amber-100');
+            DOM.pauseBtn.classList.replace('text-green-800', 'text-amber-800');
+
+            DOM.hugeAnswerContainer.classList.add('hidden');
+            DOM.gameDisplay.classList.remove('border-green-500', 'border-solid', 'bg-green-50');
+            DOM.gameDisplay.classList.add('border-gray-300', 'border-dashed');
+            DOM.currentQuestionText.classList.add('text-4xl', 'md:text-5xl');
+            DOM.currentQuestionText.classList.remove('text-2xl', 'md:text-3xl', 'text-gray-500');
+            
+            DOM.recognizedText.innerText = "...";
+            DOM.statusIndicator.innerHTML = "🔴 <span class='text-red-500 blink pulse-animation'>麥克風重新收音中...</span>";
+            isGameActive = true;
+            
+            try { recognition.stop(); } catch(e){}
+            setTimeout(() => { try { recognition.start(); } catch(e){} }, 200);
+        });
+
+        DOM.pauseBtn.addEventListener('click', () => {
+            if (!isGameActive) return;
+            
+            isPaused = !isPaused;
+            if (isPaused) {
+                try { recognition.stop(); } catch(e){}
+                DOM.pauseBtn.innerHTML = "▶️ 繼續";
+                DOM.pauseBtn.classList.replace('bg-amber-100', 'bg-green-100');
+                DOM.pauseBtn.classList.replace('text-amber-800', 'text-green-800');
+                DOM.statusIndicator.innerHTML = "⏸️ 收音已暫停";
+                DOM.statusIndicator.className = "text-xl font-bold text-amber-600 flex items-center justify-center mt-2";
+            } else {
+                DOM.pauseBtn.innerHTML = "⏸️ 暫停";
+                DOM.pauseBtn.classList.replace('bg-green-100', 'bg-amber-100');
+                DOM.pauseBtn.classList.replace('text-green-800', 'text-amber-800');
+                DOM.statusIndicator.innerHTML = "🔴 <span class='text-red-500 blink pulse-animation'>麥克風持續收音中...</span>";
+                DOM.statusIndicator.className = "text-xl font-bold flex items-center justify-center mt-2";
+                try { recognition.start(); } catch(e){}
+            }
+        });
+
+        function loadQuestionBank() {
+            const saved = localStorage.getItem('textBomberBank_pwa');
+            if (saved) questionBank = JSON.parse(saved);
+            else questionBank = [...defaultQuestions];
+            DOM.questionBankInput.value = questionBank.join('\n');
+        }
+
+        DOM.saveBankBtn.addEventListener('click', () => {
+            const lines = DOM.questionBankInput.value.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            if (lines.length === 0) {
+                showMessage("題庫不能為空！");
+                return;
+            }
+            questionBank = lines;
+            localStorage.setItem('textBomberBank_pwa', JSON.stringify(questionBank));
+            
+            DOM.saveBankBtn.innerText = "✅ 儲存成功";
+            DOM.saveBankBtn.classList.replace('bg-gray-800', 'bg-green-600');
+            setTimeout(() => {
+                DOM.saveBankBtn.innerText = "💾 儲存題庫";
+                DOM.saveBankBtn.classList.replace('bg-green-600', 'bg-gray-800');
+            }, 2000);
+        });
+
+        window.onload = loadQuestionBank;
+
+    </script>
+</body>
+</html>
